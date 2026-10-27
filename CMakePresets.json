@@ -1,0 +1,60 @@
+{
+    "version": 6,
+    "configurePresets": [
+        {
+            "name": "linux-dev",
+            "displayName": "Linux Debug (Makefiles)",
+            "description": "Debug build using Unix Makefiles and the dist install tree.",
+            "binaryDir": "${sourceDir}/build",
+            "generator": "Unix Makefiles",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/dist",
+                "USE_OPENGL": "ON"
+            }
+        },
+        {
+            "name": "ninja-debug",
+            "displayName": "Linux Debug (Ninja)",
+            "description": "Debug build using Ninja in the out directory.",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "dev-build",
+            "configurePreset": "linux-dev"
+        },
+        {
+            "name": "dev-install",
+            "configurePreset": "linux-dev",
+            "targets": [
+                "install"
+            ]
+        }
+    ],
+    "workflowPresets": [
+        {
+            "name": "dev",
+            "steps": [
+                {
+                    "type": "configure",
+                    "name": "linux-dev"
+                },
+                {
+                    "type": "build",
+                    "name": "dev-build"
+                },
+                {
+                    "type": "build",
+                    "name": "dev-install"
+                }
+            ]
+        }
+    ]
+}
