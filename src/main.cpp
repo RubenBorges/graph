@@ -158,7 +158,8 @@ void testWireFrameRoundTrip() {
         {601, {}, FrameKind::Data},
         {602, {'C', 'L', 'E', 'A', 'N', 'U', 'P'}, FrameKind::Data},
         {603, {0, 255, 17}, FrameKind::Acknowledgement},
-        {604, {}, FrameKind::Cleanup}
+        {604, {}, FrameKind::Cleanup},
+        {605, {0, 0, 0, 1, 0, 0, 0, 10, 0, 0, 0, 11}, FrameKind::Position}
     };
 
     for (const GraphFrame& frame : expected) {
@@ -178,11 +179,31 @@ void testWireFrameRoundTrip() {
     }
 }
 
+void testPositionPropagation() {
+    Process root(800);
+    Process branch(801);
+    Process remoteLeaf(802);
+
+    root.addChild(branch.identity);
+    branch.setParent(root.identity);
+    branch.addChild(remoteLeaf.identity);
+    remoteLeaf.setParent(branch.identity);
+
+    root.registerChannel(branch.identity, PointerChannel<Process>(&branch));
+    branch.registerChannel(root.identity, PointerChannel<Process>(&root));
+    branch.registerChannel(remoteLeaf.identity, PointerChannel<Process>(&remoteLeaf));
+    remoteLeaf.registerChannel(branch.identity, PointerChannel<Process>(&branch));
+
+    root.position(900, {{root.identity, 900}});
+    require(root.isProcessKnown(900), "Origin did not retain the announced process");
+    require(branch.isProcessKnown(900), "Adjacent process did not learn the position");
+    require(remoteLeaf.isProcessKnown(900), "Position was not forwarded through the graph");
+}
+
 void testSocketBackedGraphLifecycle() {
     Process root(700);
     Process firstChild(701);
     Process secondChild(702);
-
     root.addChild(firstChild.identity);
     root.addChild(secondChild.identity);
     firstChild.setParent(root.identity);
@@ -220,12 +241,14 @@ void testSocketBackedGraphLifecycle() {
             "Root completed before receiving acknowledgements from every child");
 
     secondChild.pollChannels();
+
     root.pollChannels();
     require(secondChild.isWaveCompleted(waveID), "Second socket child did not complete its wave");
     require(root.isWaveCompleted(waveID), "Root did not complete after all child acknowledgements");
 
     firstChild.pollChannels();
     secondChild.pollChannels();
+
     require(firstChild.isWaveCleaned(waveID), "First socket child did not receive cleanup");
     require(secondChild.isWaveCleaned(waveID), "Second socket child did not receive cleanup");
 }
@@ -238,6 +261,7 @@ int main() {
         {"Topology validation", testTopologyValidation},
         {"Local branching tree lifecycle", testLocalTreeLifecycle},
         {"Wire frame round-trip", testWireFrameRoundTrip},
+        {"Position propagation", testPositionPropagation},
         {"Socket-backed graph lifecycle", testSocketBackedGraphLifecycle}
     };
 

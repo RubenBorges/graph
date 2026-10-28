@@ -30,18 +30,19 @@ Wire& Wire::operator=(Wire&& other) noexcept {
 
 bool Wire::sendFrame(const GraphFrame& frame) const {
     if (socket_fd < 0) return false;
-    if (frame.payload.size() > std::numeric_limits<uint32_t>::max()) {
+    if (frame.payload.size() > MAX_FRAME_PAYLOAD_SIZE ||
+        frame.payload.size() > std::numeric_limits<uint32_t>::max()) {
         throw std::length_error("Frame payload is too large to encode");
     }
-    if (frame.kind > FrameKind::Cleanup) {
+    if (frame.kind > FrameKind::Position) {
         throw std::invalid_argument("Invalid frame kind");
     }
 
     MessageHeader header;
-    header.magic = MAGIC_MARKER;
-    header.waveId = static_cast<uint32_t>(frame.waveID); // FIX: Pointing to frame.waveID matching definition layout
+    header.magic = htonl(MAGIC_MARKER);
+    header.waveId = htonl(static_cast<uint32_t>(frame.waveID));
     header.kind = static_cast<uint8_t>(frame.kind);
-    header.payloadLength = static_cast<uint32_t>(frame.payload.size());
+    header.payloadLength = htonl(static_cast<uint32_t>(frame.payload.size()));
 
     std::vector<uint8_t> wirePacket;
     wirePacket.reserve(sizeof(MessageHeader) + frame.payload.size() + sizeof(CRC32_t));
@@ -49,7 +50,7 @@ bool Wire::sendFrame(const GraphFrame& frame) const {
     const uint8_t* headerPtr = reinterpret_cast<const uint8_t*>(&header);
     wirePacket.insert(wirePacket.end(), headerPtr, headerPtr + sizeof(MessageHeader));
     wirePacket.insert(wirePacket.end(), frame.payload.begin(), frame.payload.end());
-    uint32_t crc = compute_crc32(wirePacket.data(), wirePacket.size());
+    uint32_t crc = htonl(compute_crc32(wirePacket.data(), wirePacket.size()));
     const uint8_t* crcPtr = reinterpret_cast<const uint8_t*>(&crc);
     wirePacket.insert(wirePacket.end(), crcPtr, crcPtr + sizeof(CRC32_t));
 

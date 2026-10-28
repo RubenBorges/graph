@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cerrno>
+#include <arpa/inet.h>
 #include <iostream>
 #include <limits>
 #include <system_error>
@@ -20,7 +21,8 @@ using Message = std::vector<uint8_t>;
 enum class FrameKind : uint8_t {
     Data,
     Acknowledgement,
-    Cleanup
+    Cleanup,
+    Position
 };
 
 // Enforce strict binary layouts across the wire
@@ -34,6 +36,7 @@ struct MessageHeader {
 #pragma pack(pop)
 
 using CRC32_t = uint32_t;
+inline constexpr size_t MAX_FRAME_PAYLOAD_SIZE = 16 * 1024 * 1024;
 
 struct GraphFrame{
     WaveID waveID;
@@ -102,7 +105,7 @@ public:
             std::memcpy(&header, readBuffer.data(), sizeof(MessageHeader));
 
             // Synchronization Guard
-            if (header.magic != MAGIC_MARKER) {
+            if (ntohl(header.magic) != MAGIC_MARKER) {
                 std::cerr << "[Wire Exception] Stream out of sync! Invalid magic marker. Dropping link.\n";
                 readBuffer.clear();
                 close(socket_fd);
@@ -110,7 +113,11 @@ public:
                 return receivedFrame;
             }
 
-            size_t totalFrameSize = sizeof(MessageHeader) + header.payloadLength + sizeof(CRC32_t);
+            const uint32_t payloadLength = ntohl(header.payloadLength);
+            if (payloadLength > MAX_FRAME_PAYLOAD_SIZE) {
+                throw std::length_error("Received frame payload is too large");
+            }
+            size_t totalFrameSize = sizeof(MessageHeader) + payloadLength + sizeof(CRC32_t);
 
             if (readBuffer.size() < totalFrameSize) {
                 break; // Full message frame body has not fully arrived over the wire yet
@@ -118,24 +125,24 @@ public:
 
             // Extract variable length payload
             const uint8_t* payload_start = readBuffer.data() + sizeof(MessageHeader);
-            std::vector<uint8_t> payload(payload_start, payload_start + header.payloadLength);
+            std::vector<uint8_t> payload(payload_start, payload_start + payloadLength);
 
             // Extract CRC checksum trailer
             CRC32_t received_crc;
-            std::memcpy(&received_crc, payload_start + header.payloadLength, sizeof(CRC32_t));
+            std::memcpy(&received_crc, payload_start + payloadLength, sizeof(CRC32_t));
 
             // Verification Check
-            if (compute_crc32(readBuffer.data(), sizeof(MessageHeader) + header.payloadLength) != received_crc) {
+            if (compute_crc32(readBuffer.data(), sizeof(MessageHeader) + payloadLength) != ntohl(received_crc)) {
                 std::cerr << "[Wire Error] Checksum verification mismatch! Frame discarded.\n";
             } else {
                 // Instantiation and transmission to target execution topology loop
-                if (header.kind > static_cast<uint8_t>(FrameKind::Cleanup)) {
+                if (header.kind > static_cast<uint8_t>(FrameKind::Position)) {
                     std::cerr << "[Wire Error] Invalid frame kind. Frame discarded.\n";
                     readBuffer.erase(readBuffer.begin(), readBuffer.begin() + totalFrameSize);
                     continue;
                 }
                 GraphFrame frame{
-                    header.waveId,
+                    ntohl(header.waveId),
                     std::move(payload),
                     static_cast<FrameKind>(header.kind)
                 };

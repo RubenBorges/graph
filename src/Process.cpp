@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <algorithm>
 
-Process::Process(ID id) : identity(id) {}
+Process::Process(ID id) : identity(id), knownProcesses{id} {}
 
 void Process::start(GraphFrame frame) {
   if (frame.kind != FrameKind::Data) {
@@ -81,6 +81,8 @@ void Process::pollChannels() {
     (void)neighbourID;
     if (auto* socket = std::get_if<SocketChannel>(&channel)) {
       socket->receive(*this);
+    } else if (auto* websocket = std::get_if<WebSocketChannel>(&channel)) {
+      websocket->receive(*this);
     }
   }
 }
@@ -94,19 +96,76 @@ bool Process::isWaveCleaned(WaveID waveID) const {
 }
 
 void Process::position(ID id, std::vector<Edge> neighbours) {
-  // FIX: Swapped 'identity' out for the correct input variable 'id'
+  if (neighbours.size() > std::numeric_limits<ID>::max()) {throw std::length_error("POSITION contains too many edges");}
+
+  bool changed = false;
   if (std::find(knownProcesses.begin(), knownProcesses.end(), id) == knownProcesses.end()) {
     knownProcesses.push_back(id);
+    changed = true;
   }
 
-  for (auto &edge : neighbours) {
+  for (const auto& edge : neighbours) {
     if (std::find(knownChannels.begin(), knownChannels.end(), edge) == knownChannels.end()) {
       knownChannels.push_back(edge);
+      changed = true;
     }
+  }
+
+  if (!changed) return;
+
+  Message payload;
+  const auto appendID = [&payload](ID value) {
+    const uint32_t networkValue = htonl(value);
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&networkValue);
+    payload.insert(payload.end(), bytes, bytes + sizeof(networkValue));
+  };
+  appendID(static_cast<ID>(neighbours.size()));
+  for (const auto& edge : neighbours) {
+    appendID(edge.source);
+    appendID(edge.destination);
+  }
+
+  const GraphFrame announcement{id, std::move(payload), FrameKind::Position};
+  for (auto& [neighbourID, channel] : activeChannels) {
+    (void)neighbourID;
+    std::visit(
+        [&announcement](auto& implementation) { implementation.send(announcement); },
+        channel
+    );
   }
 }
 
+bool Process::isProcessKnown(ID id) const {
+  return std::find(knownProcesses.begin(), knownProcesses.end(), id) != knownProcesses.end();
+}
+
 void Process::receive(GraphFrame frame) {
+    if (frame.kind == FrameKind::Position) {
+        if (frame.payload.size() < sizeof(uint32_t)) {
+            throw std::invalid_argument("Malformed POSITION frame");
+        }
+
+        const auto readID = [&frame](size_t offset) {
+            uint32_t value;
+            std::memcpy(&value, frame.payload.data() + offset, sizeof(value));
+            return static_cast<ID>(ntohl(value));
+        };
+        const size_t edgeCount = readID(0);
+        if (edgeCount > (std::numeric_limits<size_t>::max() - sizeof(uint32_t)) / (2 * sizeof(uint32_t)) ||
+            frame.payload.size() != sizeof(uint32_t) + edgeCount * 2 * sizeof(uint32_t)) {
+            throw std::invalid_argument("Malformed POSITION frame edge list");
+        }
+
+        std::vector<Edge> neighbours;
+        neighbours.reserve(edgeCount);
+        for (size_t i = 0; i < edgeCount; ++i) {
+            const size_t offset = sizeof(uint32_t) + i * 2 * sizeof(uint32_t);
+            neighbours.push_back(Edge{readID(offset), readID(offset + sizeof(uint32_t))});
+        }
+        position(frame.waveID, std::move(neighbours));
+        return;
+    }
+
     if (frame.kind == FrameKind::Cleanup) {
         if (!cleanedWaves.insert(frame.waveID).second) return;
         completedWaves.insert(frame.waveID);

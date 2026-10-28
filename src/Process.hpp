@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <utility>
 #include <Wire.hpp>
+#include <WebSocketChannel.hpp>
 
 class Process;
 
@@ -50,7 +51,7 @@ public:
     bool receive(Process& process) { return wire->receiveAndParse(process); }
 };
 
-using Channel = std::variant<PointerChannel<Process>, SocketChannel>;
+using Channel = std::variant<PointerChannel<Process>, SocketChannel, WebSocketChannel>;
 
 class Process {
 public:
@@ -76,12 +77,15 @@ public:
     void pollChannels();
     bool isWaveCompleted(WaveID waveID) const;
     bool isWaveCleaned(WaveID waveID) const;
+    bool isProcessKnown(ID id) const;
     void position(ID id, std::vector<Edge> neighbours);
     void receive(GraphFrame frame);
     void registerChannel(ID neighbourID, Channel channelImplementation);
     void addChild(ID childID);
     void addChild(Process* child);
     void setParent(ID parentID);
+    uint8_t getActiveWaves(){ return activeWaves.size();}
+    uint8_t getCompletedWaves(){ return completedWaves.size();}
 
 private:
     void go(GraphFrame frame);
